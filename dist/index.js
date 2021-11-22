@@ -4231,7 +4231,7 @@ function resolveTemplateCompilerOptions(descriptor, options, ssr) {
     };
   }
   if (transformAssetUrls && typeof transformAssetUrls === "object") {
-    if (Object.keys(transformAssetUrls).some((key) => Array.isArray(transformAssetUrls[key]))) {
+    if (Object.values(transformAssetUrls).some((val) => Array.isArray(val))) {
       transformAssetUrls = __spreadProps(__spreadValues({}, assetUrlOptions), {
         tags: transformAssetUrls
       });
@@ -4283,6 +4283,10 @@ function setResolvedScript(descriptor, script, ssr) {
   ;
   (ssr ? ssrCache : clientCache).set(descriptor, script);
 }
+function isUseInlineTemplate(descriptor, isProd, allowUseInlineTemplate) {
+  var _a;
+  return allowUseInlineTemplate && isProd && !!descriptor.scriptSetup && !((_a = descriptor.template) == null ? void 0 : _a.src);
+}
 function resolveScript(descriptor, options, ssr) {
   if (!descriptor.script && !descriptor.scriptSetup) {
     return null;
@@ -4296,7 +4300,7 @@ function resolveScript(descriptor, options, ssr) {
   resolved = compiler.compileScript(descriptor, __spreadProps(__spreadValues({}, options.script), {
     id: descriptor.id,
     isProd: options.isProduction,
-    inlineTemplate: options.allowUseInlineTemplate && !options.devServer,
+    inlineTemplate: isUseInlineTemplate(descriptor, !options.devServer, !!options.allowUseInlineTemplate),
     refTransform: options.refTransform !== false,
     templateOptions: resolveTemplateCompilerOptions(descriptor, options, ssr),
     sourceMap: options.sourceMap
@@ -4312,6 +4316,7 @@ var import_path4 = __toModule(require("path"));
 // src/handleHotUpdate.ts
 var import_debug = __toModule(require_src());
 var debug = (0, import_debug.default)("vite:hmr");
+var directRequestRE = /(\?|&)direct\b/;
 async function handleHotUpdate({ file, modules, read, server }, options) {
   var _a;
   const prevDescriptor = getDescriptor(file, options, false);
@@ -4355,7 +4360,7 @@ async function handleHotUpdate({ file, modules, read, server }, options) {
     const next = nextStyles[i];
     if (!prev || !isEqualBlock(prev, next)) {
       didUpdateStyle = true;
-      const mod = modules.find((m) => m.url.includes(`type=style&index=${i}`) && m.url.endsWith(`.${next.lang || "css"}`));
+      const mod = modules.find((m) => m.url.includes(`type=style&index=${i}`) && m.url.endsWith(`.${next.lang || "css"}`) && !directRequestRE.test(m.url));
       if (mod) {
         affectedModules.add(mod);
         if (mod.url.includes("&inline")) {
@@ -4430,10 +4435,11 @@ var import_vite = __toModule(require("vite"));
 var EXPORT_HELPER_ID = "plugin-vue:export-helper";
 var helperCode = `
 export default (sfc, props) => {
+  const target = sfc.__vccOpts || sfc;
   for (const [key, val] of props) {
-    sfc[key] = val
+    target[key] = val;
   }
-  return sfc
+  return target;
 }
 `;
 
@@ -4450,8 +4456,7 @@ async function transformMain(code, filename, options, pluginContext, ssr, asCust
   const attachedProps = [];
   const hasScoped = descriptor.styles.some((s) => s.scoped);
   const { code: scriptCode, map } = await genScriptCode(descriptor, options, pluginContext, ssr);
-  const useInlineTemplate = options.allowUseInlineTemplate && !devServer && descriptor.scriptSetup && !(descriptor.template && descriptor.template.src);
-  const hasTemplateImport = descriptor.template && !useInlineTemplate;
+  const hasTemplateImport = descriptor.template && !isUseInlineTemplate(descriptor, !devServer, !!options.allowUseInlineTemplate);
   let templateCode = "";
   let templateMap;
   if (hasTemplateImport) {
@@ -4553,7 +4558,7 @@ async function genScriptCode(descriptor, options, pluginContext, ssr) {
   const script = resolveScript(descriptor, options, ssr);
   if (script) {
     if ((!script.lang || script.lang === "ts") && !script.src) {
-      scriptCode = compiler.rewriteDefault(script.content, "_sfc_main", script.lang === "ts" ? ["typescript"] : script.lang === "tsx" ? ["typescript", "jsx"] : void 0);
+      scriptCode = compiler.rewriteDefault(script.content, "_sfc_main", script.lang === "ts" ? ["typescript"] : void 0);
       map = script.map;
     } else {
       if (script.src) {
@@ -4719,6 +4724,7 @@ function vuePlugin(rawOptions = {}) {
     root: process.cwd(),
     sourceMap: true
   });
+  const isSSR = (opt) => opt === void 0 ? !!options.ssr : typeof opt === "boolean" ? opt : (opt == null ? void 0 : opt.ssr) === true;
   return {
     name: "vite:vue",
     handleHotUpdate(ctx) {
@@ -4756,7 +4762,8 @@ function vuePlugin(rawOptions = {}) {
         return id;
       }
     },
-    load(id, ssr = !!options.ssr) {
+    load(id, opt) {
+      const ssr = isSSR(opt);
       if (id === EXPORT_HELPER_ID) {
         return helperCode;
       }
@@ -4784,7 +4791,8 @@ function vuePlugin(rawOptions = {}) {
         }
       }
     },
-    transform(code, id, ssr = !!options.ssr) {
+    transform(code, id, opt) {
+      const ssr = isSSR(opt);
       const { filename, query } = parseVueRequest(id);
       if (query.raw) {
         return;
